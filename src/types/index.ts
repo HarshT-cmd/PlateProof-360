@@ -185,10 +185,12 @@ export interface AuditEntry {
   id: string;
   at: string;
   actor: string;
+  actorRole?: UserRole;
   action: string;
   detail: string;
   previousStatus?: string;
   newStatus?: string;
+  customerVisible?: boolean;
 }
 
 /** A customer / in-house complaint with its full investigative lifecycle. */
@@ -211,6 +213,7 @@ export interface ComplaintRecord {
   evidence: EvidenceItem[];
   auditTrail: AuditEntry[];
   resolutionNote: string;
+  internalNotes?: string;
   closedAt: string | null;
 }
 

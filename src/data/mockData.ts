@@ -1,4 +1,13 @@
-import type { OrderSafetyProof, TemperatureTrendPoint, SafetyIncident, InventoryRisk, CorrectiveAction, InspectionAuditRecord, ComplaintRecord } from '../types';
+import type {
+  OrderSafetyProof,
+  TemperatureTrendPoint,
+  SafetyIncident,
+  InventoryRisk,
+  CorrectiveAction,
+  InspectionAuditRecord,
+  ComplaintRecord,
+  User,
+} from '../types';
 
 export const sampleOrder1042: OrderSafetyProof = {
   orderId: 'ORD-1042',
@@ -582,9 +591,9 @@ export function getOrderProof(tokenOrId: string): OrderSafetyProof {
 export const sampleComplaints: ComplaintRecord[] = [
   {
     id: 'CMP-2026-091',
-    orderId: 'ORD-1042',
-    token: 'order-1042',
-    dishName: 'Artisanal Paneer Tikka Masala',
+    orderId: 'ORD-1041',
+    token: 'order-1041',
+    dishName: 'Paneer Tikka Platter (Catering Bay 1)',
     category: 'allergen',
     severity: 'critical',
     status: 'investigating',
@@ -704,4 +713,36 @@ export const sampleComplaints: ComplaintRecord[] = [
     closedAt: '11:32 AM IST',
   },
 ];
+
+export const sampleUsers: User[] = [
+  {
+    id: 'USR-01',
+    name: 'Chef R. Suresh',
+    role: 'supervisor',
+    employeeId: 'FSS-KA-8819',
+    active: true,
+  },
+  {
+    id: 'USR-02',
+    name: 'Ankit Verma',
+    role: 'staff',
+    employeeId: 'CK-KA-4412',
+    active: true,
+  },
+  {
+    id: 'USR-03',
+    name: 'K. Meenakshi',
+    role: 'auditor',
+    employeeId: 'QA-KA-9901',
+    active: true,
+  },
+  {
+    id: 'USR-04',
+    name: 'Diner (Guest)',
+    role: 'customer',
+    employeeId: null,
+    active: true,
+  },
+];
+
 

@@ -14,14 +14,14 @@ import {
   FileText,
   BadgeCheck,
 } from 'lucide-react';
-import { sampleOrdersList } from '../data/mockData';
 import { useSafetyContext } from '../context';
 import { ReportProblemModal } from '../components/ReportProblemModal';
+import { EvidenceGallery } from '../components/EvidenceGallery';
 
 export const OrderSafetyPage: React.FC = () => {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { getOrder, getComplaintsForOrder } = useSafetyContext();
+  const { getOrder, getComplaintsForOrder, getIncidentsForOrder, orders } = useSafetyContext();
   const order = getOrder(token || 'order-1042');
   const complaints = getComplaintsForOrder(order.orderId);
 
@@ -87,7 +87,7 @@ export const OrderSafetyPage: React.FC = () => {
                 aria-label="Select order sample"
                 className="bg-white border border-[#22241F]/15 rounded-lg px-2.5 py-1 text-xs font-semibold text-[#183C2B] focus:outline-none focus:border-[#183C2B] cursor-pointer"
               >
-                {sampleOrdersList.map((s) => (
+                {orders.map((s) => (
                   <option key={s.token} value={s.token}>
                     {s.orderId} - {s.dishName} ({s.isVegetarian ? 'Veg' : 'Non-Veg'})
                   </option>
@@ -120,28 +120,194 @@ export const OrderSafetyPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Active Safety Query Status Banner if complaints filed */}
-        {complaints.length > 0 && (
-          <div className="bg-[#FAF8F4] border border-[#B99A60]/40 rounded-xl p-4 flex items-start gap-3 shadow-xs print:hidden">
-            <AlertTriangle className="w-5 h-5 text-[#B99A60] shrink-0 mt-0.5" />
-            <div className="flex-1 text-xs space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold text-[#183C2B]">Active Safety Query on Record ({complaints[0].id})</span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                  complaints[0].status === 'resolved-closed'
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : 'bg-amber-100 text-amber-900'
-                }`}>
-                  {complaints[0].status === 'resolved-closed' ? 'Verified & Resolved' : 'Under Active Kitchen Review'}
-                </span>
+        {/* Active Safety Query & Remediation Stepper if complaints filed */}
+        {complaints.length > 0 && (() => {
+          const complaint = complaints[0];
+          const linkedIncidents = getIncidentsForOrder(order.orderId);
+          const primaryIncident = linkedIncidents[0] || null;
+
+          const isClosed = complaint.status === 'resolved-closed' || primaryIncident?.status === 'closed' || primaryIncident?.status === 'verified-closed';
+          const isVerified = isClosed || primaryIncident?.status === 'verified';
+          const isFixed = isVerified || primaryIncident?.status === 'fixed' || primaryIncident?.status === 'awaiting-verification';
+          const isInvestigating = isFixed || complaint.status === 'investigating' || primaryIncident?.status === 'in-progress' || primaryIncident?.status === 'open';
+
+          const customerVisibleTimeline = (complaint.auditTrail || []).filter(
+            (entry) => entry.customerVisible !== false
+          );
+
+          return (
+            <div className="bg-[#FAF8F4] border-2 border-[#B99A60]/50 rounded-2xl p-6 shadow-sm space-y-5 print:hidden">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#B99A60]/20">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#183C2B]/10 border border-[#183C2B]/20 flex items-center justify-center shrink-0 text-[#183C2B]">
+                    <ShieldCheck className="w-6 h-6 text-[#B99A60]" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-base text-[#183C2B]">
+                        Active Customer Safety Inquiry ({complaint.id})
+                      </span>
+                      <span
+                        className={`px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wider ${
+                          isClosed
+                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                            : 'bg-amber-100 text-amber-950 border border-amber-300'
+                        }`}
+                      >
+                        {isClosed ? 'Certified & Closed' : isVerified ? 'Supervisor Verified' : isFixed ? 'Kitchen Remediation Applied' : 'Under Investigation'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#55584F] mt-0.5">
+                      Issue: <strong className="text-[#22241F] capitalize">{complaint.category}</strong> &middot; Reported {complaint.reportedAt} &middot; Severity: <strong className="uppercase text-amber-800">{complaint.severity}</strong>
+                    </p>
+                  </div>
+                </div>
+
+                {primaryIncident && (
+                  <div className="text-right text-xs">
+                    <span className="text-[11px] text-[#808477] font-medium block">Kitchen Incident Code</span>
+                    <span className="font-mono font-bold text-[#183C2B] bg-[#183C2B]/10 px-2 py-0.5 rounded">
+                      {primaryIncident.id}
+                    </span>
+                  </div>
+                )}
               </div>
-              <p className="text-[#55584F] leading-relaxed">
-                Category: <strong className="text-[#22241F] capitalize">{complaints[0].category}</strong> &middot; Reported at {complaints[0].reportedAt}.
-                {complaints[0].resolutionNote ? ` Resolution: ${complaints[0].resolutionNote}` : ' Assigned to Shift Supervisor Chef R. Suresh for active station triage.'}
-              </p>
+
+              {/* 4-Stage Visual Lifecycle Stepper */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-1">
+                {/* Step 1 */}
+                <div className="p-3 rounded-xl bg-white border border-emerald-300 shadow-2xs space-y-1">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="text-xs font-bold text-stone-900">1. Concern Filed</span>
+                  </div>
+                  <span className="text-[11px] text-stone-600 block leading-tight">
+                    Diner report registered with lead auditor
+                  </span>
+                </div>
+
+                {/* Step 2 */}
+                <div
+                  className={`p-3 rounded-xl border shadow-2xs space-y-1 transition-all ${
+                    isFixed
+                      ? 'bg-white border-emerald-300'
+                      : isInvestigating
+                      ? 'bg-amber-50/60 border-amber-300'
+                      : 'bg-stone-50 border-stone-200 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {isFixed ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <span className="w-4 h-4 rounded-full bg-amber-500 text-white flex items-center justify-center text-[10px] font-bold">2</span>
+                    )}
+                    <span className="text-xs font-bold text-stone-900">2. Remediation (Fixed)</span>
+                  </div>
+                  <span className="text-[11px] text-stone-600 block leading-tight">
+                    {isFixed ? 'Probe calibrated & dish re-checked' : 'Station inspection in progress'}
+                  </span>
+                </div>
+
+                {/* Step 3 */}
+                <div
+                  className={`p-3 rounded-xl border shadow-2xs space-y-1 transition-all ${
+                    isVerified
+                      ? 'bg-white border-emerald-300'
+                      : isFixed
+                      ? 'bg-amber-50/60 border-amber-300'
+                      : 'bg-stone-50 border-stone-200 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {isVerified ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <span className="w-4 h-4 rounded-full bg-stone-300 text-stone-700 flex items-center justify-center text-[10px] font-bold">3</span>
+                    )}
+                    <span className="text-xs font-bold text-stone-900">3. Supervisor Verified</span>
+                  </div>
+                  <span className="text-[11px] text-stone-600 block leading-tight">
+                    {isVerified ? 'Independent evidence sign-off' : 'Awaiting supervisor audit'}
+                  </span>
+                </div>
+
+                {/* Step 4 */}
+                <div
+                  className={`p-3 rounded-xl border shadow-2xs space-y-1 transition-all ${
+                    isClosed
+                      ? 'bg-emerald-50 border-emerald-400'
+                      : isVerified
+                      ? 'bg-amber-50/60 border-amber-300'
+                      : 'bg-stone-50 border-stone-200 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {isClosed ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <span className="w-4 h-4 rounded-full bg-stone-300 text-stone-700 flex items-center justify-center text-[10px] font-bold">4</span>
+                    )}
+                    <span className="text-xs font-bold text-stone-900">4. Certified &amp; Closed</span>
+                  </div>
+                  <span className="text-[11px] text-stone-600 block leading-tight">
+                    {isClosed ? 'Formal certification complete' : 'Pending final closure audit'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Customer-Facing Resolution Banner */}
+              {complaint.resolutionNote && (
+                <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 text-xs space-y-1">
+                  <strong className="block text-sm font-bold text-[#183C2B] flex items-center gap-1.5">
+                    <BadgeCheck className="w-4 h-4 text-emerald-700" />
+                    <span>Kitchen Resolution &amp; Safety Attestation</span>
+                  </strong>
+                  <p className="leading-relaxed font-medium">{complaint.resolutionNote}</p>
+                </div>
+              )}
+
+              {/* Customer-Visible Timeline Updates (internal staff notes excluded) */}
+              {customerVisibleTimeline.length > 0 && (
+                <div className="pt-2 border-t border-[#B99A60]/20 space-y-2">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#183C2B] block">
+                    Public Audit Updates for Diner Review
+                  </span>
+                  <div className="space-y-1.5">
+                    {customerVisibleTimeline.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="p-2.5 rounded-lg bg-white border border-stone-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-1"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                          <strong className="font-semibold text-stone-900">{entry.action}:</strong>
+                          <span className="text-stone-700">{entry.detail}</span>
+                        </div>
+                        <div className="text-[11px] text-stone-500 font-mono shrink-0">
+                          {entry.actor} &middot; {entry.at}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Attached Verification Evidence for Diner */}
+              {complaint.evidence && complaint.evidence.length > 0 && (
+                <div className="pt-2 border-t border-[#B99A60]/20">
+                  <div className="text-[11px] font-extrabold text-[#183C2B] uppercase tracking-wider mb-2">
+                    Verified Investigative Evidence Attached
+                  </div>
+                  <EvidenceGallery
+                    evidence={complaint.evidence}
+                    canAttach={false}
+                  />
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* 2-Column Responsive Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">

@@ -21,9 +21,22 @@ export const ReportProblemModal: React.FC<ReportProblemModalProps> = ({
   const [dinerContact, setDinerContact] = useState('');
   const [seatNumber, setSeatNumber] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submittedTicket, setSubmittedTicket] = useState<{ id: string; time: string; incidentCreated: boolean } | null>(null);
+  const [submittedTicket, setSubmittedTicket] = useState<{
+    id: string;
+    time: string;
+    incidentCreated: boolean;
+    duplicate: boolean;
+    incidentId?: string;
+  } | null>(null);
 
   if (!isOpen) return null;
+
+  const handleQuickFillUndercooked = () => {
+    setCategory('temperature');
+    setDescription('Paneer Tikka Masala appears undercooked, soft and cool in the center core.');
+    setSeatNumber('Table 4');
+    setDinerContact('+91 98765 43210');
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,6 +58,8 @@ export const ReportProblemModal: React.FC<ReportProblemModalProps> = ({
         id: filing.complaint.id,
         time: filing.complaint.reportedAt,
         incidentCreated: filing.incident !== null,
+        duplicate: filing.duplicate,
+        incidentId: filing.incident?.id,
       });
     }, 400);
   };
@@ -81,11 +96,21 @@ export const ReportProblemModal: React.FC<ReportProblemModalProps> = ({
         {submittedTicket ? (
           <div className="p-8 text-center space-y-4">
             <div className="w-14 h-14 bg-[#183C2B]/10 text-[#183C2B] rounded-full mx-auto flex items-center justify-center border border-[#183C2B]/20">
-              <CheckCircle2 className="w-8 h-8" />
+              <CheckCircle2 className="w-8 h-8 text-emerald-600" />
             </div>
-            <h4 className="font-serif text-2xl text-[#183C2B]">Incident Logged Immediately</h4>
+            <h4 className="font-serif text-2xl text-[#183C2B]">
+              {submittedTicket.duplicate ? 'Inquiry Already Active' : 'Incident Logged Immediately'}
+            </h4>
             <p className="text-sm text-[#55584F] leading-relaxed max-w-md mx-auto">
-              Your concern for <span className="font-medium text-[#22241F]">{dishName}</span> (Order {orderId}) has been dispatched to Shift Supervisor <strong className="text-[#183C2B]">Chef R. Suresh</strong>.
+              {submittedTicket.duplicate ? (
+                <span>
+                  An active inquiry for <span className="font-medium text-[#22241F]">{dishName}</span> is already under supervisor investigation. Your note was attached to Ticket #{submittedTicket.id} without creating duplicate incidents.
+                </span>
+              ) : (
+                <span>
+                  Your concern for <span className="font-medium text-[#22241F]">{dishName}</span> (Order {orderId}) has been dispatched to Shift Supervisor <strong className="text-[#183C2B]">Chef R. Suresh</strong>.
+                </span>
+              )}
             </p>
 
             <div className="bg-[#F5F1E8] p-4 rounded border border-[#22241F]/15 text-left text-xs space-y-2 max-w-sm mx-auto">
@@ -101,23 +126,37 @@ export const ReportProblemModal: React.FC<ReportProblemModalProps> = ({
                 <span className="text-[#55584F]">Supervisor SLA:</span>
                 <span className="text-emerald-700 font-medium">Under 3 minutes (Table visit / QA hold)</span>
               </div>
-              {submittedTicket.incidentCreated && (
+              {submittedTicket.incidentId && (
                 <div className="flex justify-between text-amber-800 border-t border-[#22241F]/10 pt-1.5">
                   <span className="text-[#55584F]">Operational Triage:</span>
-                  <span className="font-semibold text-[#183C2B]">Alert active on Kitchen Board</span>
+                  <span className="font-semibold text-[#183C2B]">Incident {submittedTicket.incidentId} (Medium Severity)</span>
                 </div>
               )}
             </div>
 
             <button
               onClick={handleReset}
-              className="mt-4 px-6 py-2.5 rounded bg-[#183C2B] text-white text-xs font-semibold uppercase tracking-wider hover:bg-[#24523C] transition-all"
+              className="mt-4 px-6 py-2.5 rounded bg-[#183C2B] text-white text-xs font-semibold uppercase tracking-wider hover:bg-[#24523C] transition-all cursor-pointer"
             >
               Return to Safety Record
             </button>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="p-6 space-y-4 text-sm">
+            {/* Quick Demo Pre-fill Button */}
+            <div className="bg-[#FAF0E6] border border-[#B99A60]/50 p-2.5 rounded-lg flex items-center justify-between gap-2">
+              <div className="text-xs text-[#183C2B]">
+                <strong className="block text-[11px] uppercase tracking-wider text-[#B99A60] font-bold">Demo Scenario #1042</strong>
+                <span className="text-[11px] text-[#55584F]">Paneer Tikka Masala appears undercooked</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleQuickFillUndercooked}
+                className="px-2.5 py-1 rounded bg-[#183C2B] text-white text-[11px] font-bold hover:bg-[#24523C] cursor-pointer shadow-xs"
+              >
+                Auto-Fill
+              </button>
+            </div>
             <div className="bg-[#B99A60]/10 border border-[#B99A60]/30 p-3 rounded text-xs text-[#22241F] flex items-start gap-2.5">
               <AlertTriangle className="w-4 h-4 text-[#B99A60] shrink-0 mt-0.5" />
               <div>

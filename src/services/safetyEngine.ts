@@ -10,8 +10,45 @@ import type {
   IncidentStatus,
   TransitionResult,
   InspectionAuditRecord,
+  UserRole,
+  SeverityRule,
+  IncidentSeverity,
 } from '../types';
 import type { PlateProofState } from './safetyStorage';
+
+/**
+ * Configurable demo safety rules defining domain severity mappings.
+ */
+export const DEFAULT_DEMO_RULES: SeverityRule[] = [
+  {
+    id: 'RULE-01',
+    name: 'Failed Hygiene Check',
+    condition: 'hygiene-failed',
+    severity: 'moderate',
+    description: 'Failed hygiene check -> Medium severity.',
+  },
+  {
+    id: 'RULE-02',
+    name: 'Operational Temperature Limit Breach',
+    condition: 'temp-exceeded',
+    severity: 'high',
+    description: 'Temperature exceeding a configured operational limit -> High severity.',
+  },
+  {
+    id: 'RULE-03',
+    name: 'Expired Ingredient Batch',
+    condition: 'ingredient-expired',
+    severity: 'critical',
+    description: 'Expired ingredient -> Critical severity.',
+  },
+  {
+    id: 'RULE-04',
+    name: 'Undercooked Food Complaint for Demo Order #1042',
+    condition: 'complaint-undercooked',
+    severity: 'moderate',
+    description: 'Undercooked-food complaint for demo Order #1042 -> Medium severity.',
+  },
+];
 
 /**
  * Format current timestamp in culinary standard format (e.g. "12:54 PM IST").
@@ -26,71 +63,247 @@ export function formatTimestamp(date: Date = new Date()): string {
 }
 
 /**
- * Creates an immutable audit entry.
+ * Creates an immutable audit entry with customer-visibility segregation and actor roles.
  */
 export function createAuditEntry(
   actor: string,
   action: string,
   detail: string,
   previousStatus?: string,
-  newStatus?: string
+  newStatus?: string,
+  customerVisible: boolean = true,
+  actorRole?: UserRole
 ): AuditEntry {
   return {
     id: `AUD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     at: formatTimestamp(),
     actor,
+    actorRole,
     action,
     detail,
     previousStatus,
     newStatus,
+    customerVisible,
   };
 }
 
-/**
- * Determines complaint severity based on category and description keywords.
- */
-export function determineSeverity(
-  category: ComplaintCategory,
-  description: string = ''
-): ComplaintSeverity {
-  const lower = description.toLowerCase();
-  if (category === 'allergen' || lower.includes('anaphylaxis') || lower.includes('allergic')) {
-    return 'critical';
-  }
-  if (category === 'temperature' || lower.includes('raw') || lower.includes('undercooked')) {
-    return 'high';
-  }
-  if (category === 'packaging' || lower.includes('tamper') || lower.includes('spill')) {
-    return 'moderate';
-  }
-  return 'low';
+export interface SafetyRuleContext {
+  orderId?: string;
+  category?: ComplaintCategory;
+  description?: string;
+  isHygieneFailed?: boolean;
+  isTempExceeded?: boolean;
+  isIngredientExpired?: boolean;
 }
 
 /**
- * Validates state transition for a safety incident.
- * Enforces rule: Cannot transition to 'verified' or 'verified-closed' without supervisor review.
+ * Evaluates configurable demo business rules.
+ */
+export function evaluateSeverityRule(context: SafetyRuleContext): IncidentSeverity {
+  // Rule 3: Expired ingredient -> Critical severity
+  if (context.isIngredientExpired) {
+    return 'critical';
+  }
+
+  // Rule 2: Temperature exceeding configured operational limit -> High severity
+  if (context.isTempExceeded) {
+    return 'high';
+  }
+
+  // Rule 1: Failed hygiene check -> Medium severity ('moderate')
+  if (context.isHygieneFailed) {
+    return 'moderate';
+  }
+
+  // Rule 4: Undercooked-food complaint for demo Order #1042 -> Medium severity ('moderate')
+  const normalizedOrder = (context.orderId || '').toLowerCase().replace(/^(order-|ord-)/, '');
+  const descLower = (context.description || '').toLowerCase();
+  if (
+    normalizedOrder === '1042' &&
+    (descLower.includes('undercooked') || descLower.includes('raw') || context.category === 'temperature')
+  ) {
+    return 'moderate';
+  }
+
+  return determineSeverity(context.category || 'quality', context.description || '', context.orderId);
+}
+
+/**
+ * Determines complaint severity based on category, description keywords, and order context.
+ */
+export function determineSeverity(
+  category: ComplaintCategory,
+  description: string = '',
+  orderId?: string
+): ComplaintSeverity {
+  const lower = description.toLowerCase();
+  const normalizedOrder = (orderId || '').toLowerCase().replace(/^(order-|ord-)/, '');
+
+  // Rule 4: Undercooked-food complaint for demo Order #1042 -> Medium severity ('moderate')
+  if (
+    normalizedOrder === '1042' &&
+    (lower.includes('undercooked') || lower.includes('raw') || category === 'temperature')
+  ) {
+    return 'moderate';
+  }
+
+  // Medical / Anaphylaxis / Critical allergen
+  if (category === 'allergen' || lower.includes('anaphylaxis') || lower.includes('allergic')) {
+    return 'critical';
+  }
+
+  // Temperature / raw under normal circumstances -> High
+  if (category === 'temperature' || lower.includes('raw') || lower.includes('undercooked')) {
+    return 'high';
+  }
+
+  // Packaging / Foreign matter -> Moderate
+  if (category === 'packaging' || lower.includes('tamper') || lower.includes('spill') || lower.includes('glass')) {
+    return 'moderate';
+  }
+
+  return 'low';
+}
+
+export interface TransitionContext {
+  actor?: string;
+  actorRole?: UserRole;
+  notes?: string;
+  evidenceProvided?: boolean;
+  incidentEvidenceCount?: number;
+  assignedStaff?: string | null;
+  capaApproved?: boolean;
+}
+
+/**
+ * Validates explicit state transitions across the canonical lifecycle:
+ * Open -> Fixed -> Verified -> Closed.
+ * Enforces:
+ * 1. Staff must not verify their own corrective actions.
+ * 2. Closure must be rejected until supervisor verification and evidence exist.
  */
 export function validateIncidentTransition(
   currentStatus: IncidentStatus,
   targetStatus: IncidentStatus,
-  hasSupervisorSignOff: boolean
+  context?: TransitionContext | boolean
 ): TransitionResult<IncidentStatus> {
-  const canonicalClosed: IncidentStatus[] = ['verified-closed', 'verified', 'closed'];
+  const ctx: TransitionContext = typeof context === 'boolean' ? { capaApproved: context } : (context || {});
 
-  if (canonicalClosed.includes(targetStatus) && !hasSupervisorSignOff) {
+  // Normalize canonical aliases
+  const normalize = (s: IncidentStatus): 'open' | 'fixed' | 'verified' | 'closed' => {
+    if (s === 'in-progress') return 'open';
+    if (s === 'awaiting-verification') return 'fixed';
+    if (s === 'verified-closed') return 'closed';
+    return s;
+  };
+
+  const from = normalize(currentStatus);
+  const to = normalize(targetStatus);
+
+  if (from === to && currentStatus === targetStatus) {
+    return { ok: true, previousState: currentStatus, newState: targetStatus };
+  }
+
+  // State 1: Open -> Fixed (or in-progress)
+  if (from === 'open') {
+    if (to === 'fixed' || targetStatus === 'in-progress' || targetStatus === 'awaiting-verification') {
+      return { ok: true, previousState: currentStatus, newState: targetStatus };
+    }
     return {
       ok: false,
       previousState: currentStatus,
       newState: targetStatus,
-      error: 'Cannot transition to verified/closed status without verified CAPA and supervisor sign-off.',
+      error: 'Invalid transition: Cannot skip from Open directly to Verified or Closed. Remediation must be documented and marked as Fixed first.',
     };
   }
 
-  return {
-    ok: true,
-    previousState: currentStatus,
-    newState: targetStatus,
-  };
+  // State 2: Fixed -> Verified (Supervisor review)
+  if (from === 'fixed') {
+    if (to === 'verified') {
+      // Role enforcement: Staff must not verify their own corrective actions
+      if (ctx.actorRole === 'staff' || ctx.actorRole === 'customer') {
+        return {
+          ok: false,
+          previousState: currentStatus,
+          newState: targetStatus,
+          error: 'Role restriction: Staff members cannot verify their own corrective actions. Verification requires an authorized supervisor or auditor.',
+        };
+      }
+
+      if (
+        ctx.assignedStaff &&
+        ctx.actor &&
+        (ctx.actor.toLowerCase().includes(ctx.assignedStaff.toLowerCase()) ||
+          ctx.assignedStaff.toLowerCase().includes(ctx.actor.toLowerCase()))
+      ) {
+        return {
+          ok: false,
+          previousState: currentStatus,
+          newState: targetStatus,
+          error: 'Self-verification prohibited: Staff members cannot verify their own corrective actions.',
+        };
+      }
+
+      return { ok: true, previousState: currentStatus, newState: targetStatus };
+    }
+
+    if (to === 'open') {
+      // Reopened if fix was insufficient
+      return { ok: true, previousState: currentStatus, newState: targetStatus };
+    }
+
+    if (to === 'closed') {
+      return {
+        ok: false,
+        previousState: currentStatus,
+        newState: targetStatus,
+        error: 'Closure rejected: Incident must be reviewed and verified by an authorized supervisor before closure.',
+      };
+    }
+  }
+
+  // State 3: Verified -> Closed
+  if (from === 'verified') {
+    if (to === 'closed') {
+      // Role enforcement: Only supervisor or auditor can close
+      if (ctx.actorRole === 'staff' || ctx.actorRole === 'customer') {
+        return {
+          ok: false,
+          previousState: currentStatus,
+          newState: targetStatus,
+          error: 'Role restriction: Only an authorized supervisor or auditor can close an incident.',
+        };
+      }
+
+      // Closure must be rejected until required evidence exists
+      const evidenceCount = ctx.incidentEvidenceCount ?? 0;
+      if (evidenceCount === 0 && !ctx.evidenceProvided) {
+        return {
+          ok: false,
+          previousState: currentStatus,
+          newState: targetStatus,
+          error: 'Closure rejected: Verifiable evidence (thermocouple log, photo, or swab test) must exist before closing an incident.',
+        };
+      }
+      return { ok: true, previousState: currentStatus, newState: targetStatus };
+    }
+
+    if (to === 'open' || to === 'fixed') {
+      return { ok: true, previousState: currentStatus, newState: targetStatus };
+    }
+  }
+
+  // State 4: Closed
+  if (from === 'closed') {
+    return {
+      ok: false,
+      previousState: currentStatus,
+      newState: targetStatus,
+      error: 'Incident is already closed and archived.',
+    };
+  }
+
+  return { ok: true, previousState: currentStatus, newState: targetStatus };
 }
 
 export interface FileComplaintInput {
@@ -107,18 +320,57 @@ export interface FileComplaintInput {
 /**
  * Files a diner food safety concern, automatically triaging severity,
  * creating an immutable audit trail, and spawning an operational incident if required.
+ * Implements idempotent filing to prevent duplicate incidents from repeated clicks.
  */
 export function fileComplaint(
   state: PlateProofState,
   input: FileComplaintInput
 ): { nextState: PlateProofState; result: ComplaintFilingResult } {
-  const severity = determineSeverity(input.category, input.description);
+  const normalizedOrderId = input.orderId.toLowerCase().replace(/^(order-|ord-)/, '');
+
+  // Idempotency check: prevent duplicate submissions for the same open complaint
+  const existingComplaint = state.complaints.find((c) => {
+    const cOrder = c.orderId.toLowerCase().replace(/^(order-|ord-)/, '');
+    const isSameOrder = cOrder === normalizedOrderId;
+    const isSameDish = c.dishName.toLowerCase().trim() === input.dishName.toLowerCase().trim();
+    const isSameCategory = c.category === input.category;
+    const isSimilarDesc =
+      c.description.toLowerCase().trim().includes(input.description.toLowerCase().trim()) ||
+      input.description.toLowerCase().trim().includes(c.description.toLowerCase().trim());
+    return isSameOrder && isSameDish && (isSameCategory || isSimilarDesc) && c.status !== 'resolved-closed';
+  });
+
+  if (existingComplaint) {
+    const linkedIncident = existingComplaint.linkedIncidentId
+      ? state.incidents.find((i) => i.id === existingComplaint.linkedIncidentId) || null
+      : null;
+
+    return {
+      nextState: state,
+      result: {
+        complaint: existingComplaint,
+        incident: linkedIncident,
+        duplicate: true,
+        auditEntries: [],
+      },
+    };
+  }
+
+  const severity = determineSeverity(input.category, input.description, input.orderId);
   const complaintId = `TKT-${Math.floor(1000 + Math.random() * 9000)}`;
   const nowFormatted = formatTimestamp();
   const reporter = input.reportedBy || (input.seatNumber ? `Diner at ${input.seatNumber}` : 'Diner (QR App)');
 
-  // Determine if this is an urgent safety issue requiring supervisor intervention
-  const requiresIncident = severity === 'critical' || severity === 'high';
+  // Determine if this is a safety issue requiring supervisor intervention
+  const isUndercooked1042 = normalizedOrderId === '1042' && input.description.toLowerCase().includes('undercooked');
+  const requiresIncident =
+    severity === 'critical' ||
+    severity === 'high' ||
+    severity === 'moderate' ||
+    isUndercooked1042 ||
+    input.category === 'temperature' ||
+    input.category === 'allergen';
+
   const incidentId = requiresIncident ? `INC-2026-${Math.floor(100 + Math.random() * 900)}` : null;
 
   const filingAudit = createAuditEntry(
@@ -126,7 +378,9 @@ export function fileComplaint(
     'Safety Concern Filed',
     `Diner flagged ${input.category.toUpperCase()} issue for ${input.dishName} (${input.orderId}): "${input.description}"`,
     undefined,
-    'filed'
+    'filed',
+    true,
+    'customer'
   );
 
   const auditEntries: AuditEntry[] = [filingAudit];
@@ -136,11 +390,13 @@ export function fileComplaint(
 
   if (requiresIncident && incidentId) {
     const triageAudit = createAuditEntry(
-      'Safety Engine Auto-Triage',
+      'Safety Action Engine',
       'Incident Escalation',
-      `Auto-escalated ${input.category} complaint to ${severity.toUpperCase()} incident. Assigned to Shift Supervisor Chef R. Suresh.`,
-      'filed',
-      'awaiting-verification'
+      `Auto-escalated ${input.category} complaint to ${severity.toUpperCase()} incident. Ready for supervisor triage.`,
+      'open',
+      'open',
+      true,
+      'supervisor'
     );
     auditEntries.push(triageAudit);
 
@@ -152,13 +408,13 @@ export function fileComplaint(
       timestamp: `${nowFormatted} (Today)`,
       reportedBy: `${reporter} (via PlateProof QR)`,
       supervisorActionNeeded: true,
-      correctiveActionPlan: `Immediate station isolation and supervisor audit initiated for order ${input.orderId}. Table visit and CCP verification scheduled.`,
-      status: 'awaiting-verification',
+      correctiveActionPlan: `Physical verification and secondary probe audit scheduled for order ${input.orderId}.`,
+      status: 'open',
       openedAt: nowFormatted,
       fixedAt: null,
       verifiedAt: null,
       closedAt: null,
-      assignedTo: 'Chef R. Suresh (FSS-KA-8819)',
+      assignedTo: null, // Awaiting manager assignment
       createdBy: reporter,
       customerVisible: true,
       internalNotes: `Auto-generated from diner ticket ${complaintId}. Contact: ${input.dinerContact}`,
@@ -168,7 +424,10 @@ export function fileComplaint(
         createAuditEntry(
           'System Auto-Triage',
           'Incident Created',
-          `Linked to diner ticket ${complaintId} for dish ${input.dishName}.`
+          `Linked to diner ticket ${complaintId} for dish ${input.dishName}.`,
+          undefined,
+          'open',
+          true
         ),
       ],
     };
@@ -189,12 +448,13 @@ export function fileComplaint(
     seatNumber: input.seatNumber,
     description: input.description,
     reportedAt: nowFormatted,
-    assignedTo: 'Chef R. Suresh (FSS-KA-8819)',
+    assignedTo: 'Shift Supervisor Chef R. Suresh',
     linkedIncidentId: incidentId,
     linkedCapaId: null,
     evidence: [],
     auditTrail: auditEntries,
     resolutionNote: '',
+    internalNotes: `Diner channel submission. Priority triage code: ${severity.toUpperCase()}`,
     closedAt: null,
   };
 
@@ -316,54 +576,364 @@ export function signOffCorrectiveAction(
 }
 
 /**
- * Transition incident status with validation and audit logging.
+ * Assigns an incident to a designated staff member with operational audit trail.
  */
-export function transitionIncident(
+export function assignIncident(
   state: PlateProofState,
   incidentId: string,
-  targetStatus: IncidentStatus,
+  assignee: string,
   actor: string = 'Chef R. Suresh',
-  notes: string = ''
-): { nextState: PlateProofState; success: boolean; error?: string } {
+  actorRole: UserRole = 'supervisor'
+): { nextState: PlateProofState; incident: SafetyIncident | null; error?: string } {
   const incident = state.incidents.find((i) => i.id === incidentId);
   if (!incident) {
-    return { nextState: state, success: false, error: 'Incident not found' };
+    return { nextState: state, incident: null, error: 'Incident not found' };
   }
 
-  // Check if target status requires supervisor sign-off
-  const isClosing = targetStatus === 'verified-closed' || targetStatus === 'closed' || targetStatus === 'verified';
-  const validation = validateIncidentTransition(incident.status, targetStatus, isClosing);
-  if (!validation.ok) {
-    return { nextState: state, success: false, error: validation.error };
-  }
-
-  const nowFormatted = formatTimestamp();
   const audit = createAuditEntry(
     actor,
-    `Status Transition: ${targetStatus}`,
-    notes || `Incident transitioned from ${incident.status} to ${targetStatus}.`,
+    'Incident Assigned',
+    `Assigned to ${assignee} for investigation and physical remediation.`,
     incident.status,
-    targetStatus
+    incident.status,
+    false,
+    actorRole
   );
 
-  const nextIncidents = state.incidents.map((inc) => {
-    if (inc.id === incidentId) {
+  const updatedIncident: SafetyIncident = {
+    ...incident,
+    assignedTo: assignee,
+    auditTrail: [...(incident.auditTrail || []), audit],
+  };
+
+  const nextIncidents = state.incidents.map((i) => (i.id === incidentId ? updatedIncident : i));
+
+  // If linked to a complaint, reflect the assignment
+  const nextComplaints = state.complaints.map((c) => {
+    if (c.linkedIncidentId === incidentId) {
       return {
-        ...inc,
-        status: targetStatus,
-        supervisorActionNeeded: isClosing ? false : inc.supervisorActionNeeded,
-        closedAt: isClosing ? nowFormatted : inc.closedAt,
-        verifiedAt: targetStatus === 'verified' || targetStatus === 'verified-closed' ? nowFormatted : inc.verifiedAt,
-        auditTrail: [...(inc.auditTrail || []), audit],
+        ...c,
+        assignedTo: assignee,
+        auditTrail: [...c.auditTrail, audit],
       };
     }
-    return inc;
+    return c;
   });
 
   return {
     nextState: {
       ...state,
       incidents: nextIncidents,
+      complaints: nextComplaints,
+    },
+    incident: updatedIncident,
+  };
+}
+
+/**
+ * Staff documents investigation, corrective action, and optional evidence metadata (Open -> Fixed).
+ */
+export function documentIncidentFix(
+  state: PlateProofState,
+  incidentId: string,
+  fixNotes: string,
+  correctiveActionPlan: string = '',
+  evidenceItem?: Omit<EvidenceItem, 'id' | 'capturedAt'>,
+  actor: string = 'Ankit Verma',
+  actorRole: UserRole = 'staff'
+): { nextState: PlateProofState; incident: SafetyIncident | null; error?: string } {
+  const incident = state.incidents.find((i) => i.id === incidentId);
+  if (!incident) {
+    return { nextState: state, incident: null, error: 'Incident not found' };
+  }
+
+  const validation = validateIncidentTransition(incident.status, 'fixed', {
+    actor,
+    actorRole,
+    notes: fixNotes,
+    assignedStaff: incident.assignedTo,
+  });
+
+  if (!validation.ok) {
+    return { nextState: state, incident: null, error: validation.error };
+  }
+
+  const nowFormatted = formatTimestamp();
+  const updatedEvidence = incident.evidence ? [...incident.evidence] : [];
+
+  if (evidenceItem) {
+    const newEvidence: EvidenceItem = {
+      id: `EVD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      capturedAt: nowFormatted,
+      ...evidenceItem,
+    };
+    updatedEvidence.push(newEvidence);
+  }
+
+  const audit = createAuditEntry(
+    actor,
+    'Remediation Documented (Fixed)',
+    fixNotes || `Corrective action executed: ${correctiveActionPlan || 'Standard remediation applied.'}`,
+    incident.status,
+    'fixed',
+    true,
+    actorRole
+  );
+
+  const updatedIncident: SafetyIncident = {
+    ...incident,
+    status: 'fixed',
+    fixedAt: nowFormatted,
+    correctiveActionPlan: correctiveActionPlan || incident.correctiveActionPlan,
+    evidence: updatedEvidence,
+    auditTrail: [...(incident.auditTrail || []), audit],
+  };
+
+  const nextIncidents = state.incidents.map((i) => (i.id === incidentId ? updatedIncident : i));
+
+  // Update linked complaint
+  const nextComplaints = state.complaints.map((c) => {
+    if (c.linkedIncidentId === incidentId) {
+      return {
+        ...c,
+        status: 'investigating' as const,
+        evidence:
+          evidenceItem && updatedEvidence.length > 0
+            ? [...(c.evidence || []), updatedEvidence[updatedEvidence.length - 1]]
+            : c.evidence,
+        auditTrail: [...c.auditTrail, audit],
+      };
+    }
+    return c;
+  });
+
+  return {
+    nextState: {
+      ...state,
+      incidents: nextIncidents,
+      complaints: nextComplaints,
+    },
+    incident: updatedIncident,
+  };
+}
+
+/**
+ * An authorized supervisor reviews submitted evidence and verifies the fix (Fixed -> Verified).
+ * Enforces: Staff must not verify their own corrective actions.
+ */
+export function verifyIncidentFix(
+  state: PlateProofState,
+  incidentId: string,
+  verificationNotes: string,
+  actor: string = 'Chef R. Suresh',
+  actorRole: UserRole = 'supervisor'
+): { nextState: PlateProofState; incident: SafetyIncident | null; error?: string } {
+  const incident = state.incidents.find((i) => i.id === incidentId);
+  if (!incident) {
+    return { nextState: state, incident: null, error: 'Incident not found' };
+  }
+
+  const validation = validateIncidentTransition(incident.status, 'verified', {
+    actor,
+    actorRole,
+    assignedStaff: incident.assignedTo,
+    incidentEvidenceCount: incident.evidence?.length || 0,
+    notes: verificationNotes,
+  });
+
+  if (!validation.ok) {
+    return { nextState: state, incident: null, error: validation.error };
+  }
+
+  const nowFormatted = formatTimestamp();
+  const audit = createAuditEntry(
+    actor,
+    'Supervisor Verification Completed',
+    `Supervisor physically verified corrective action and probe readings: "${verificationNotes}"`,
+    incident.status,
+    'verified',
+    true,
+    actorRole
+  );
+
+  const updatedIncident: SafetyIncident = {
+    ...incident,
+    status: 'verified',
+    verifiedAt: nowFormatted,
+    auditTrail: [...(incident.auditTrail || []), audit],
+  };
+
+  const nextIncidents = state.incidents.map((i) => (i.id === incidentId ? updatedIncident : i));
+
+  const nextComplaints = state.complaints.map((c) => {
+    if (c.linkedIncidentId === incidentId) {
+      return {
+        ...c,
+        auditTrail: [...c.auditTrail, audit],
+      };
+    }
+    return c;
+  });
+
+  return {
+    nextState: {
+      ...state,
+      incidents: nextIncidents,
+      complaints: nextComplaints,
+    },
+    incident: updatedIncident,
+  };
+}
+
+/**
+ * An authorized supervisor formally closes and certifies the incident (Verified -> Closed).
+ * Enforces: Closure must be rejected until required evidence and supervisor verification exist.
+ */
+export function closeIncident(
+  state: PlateProofState,
+  incidentId: string,
+  closureNotes: string,
+  actor: string = 'Chef R. Suresh',
+  actorRole: UserRole = 'supervisor'
+): { nextState: PlateProofState; incident: SafetyIncident | null; error?: string } {
+  const incident = state.incidents.find((i) => i.id === incidentId);
+  if (!incident) {
+    return { nextState: state, incident: null, error: 'Incident not found' };
+  }
+
+  const validation = validateIncidentTransition(incident.status, 'closed', {
+    actor,
+    actorRole,
+    assignedStaff: incident.assignedTo,
+    incidentEvidenceCount: incident.evidence?.length || 0,
+    notes: closureNotes,
+  });
+
+  if (!validation.ok) {
+    return { nextState: state, incident: null, error: validation.error };
+  }
+
+  const nowFormatted = formatTimestamp();
+  const audit = createAuditEntry(
+    actor,
+    'Incident Certified & Closed',
+    closureNotes || 'Incident formally closed following supervisor review and verified evidence audit.',
+    incident.status,
+    'closed',
+    true,
+    actorRole
+  );
+
+  const updatedIncident: SafetyIncident = {
+    ...incident,
+    status: 'closed',
+    closedAt: nowFormatted,
+    supervisorActionNeeded: false,
+    auditTrail: [...(incident.auditTrail || []), audit],
+  };
+
+  const nextIncidents = state.incidents.map((i) => (i.id === incidentId ? updatedIncident : i));
+
+  // Close linked complaints
+  const nextComplaints = state.complaints.map((c) => {
+    if (c.linkedIncidentId === incidentId) {
+      return {
+        ...c,
+        status: 'resolved-closed' as const,
+        closedAt: nowFormatted,
+        resolutionNote: closureNotes || 'Remedial action verified and approved by Shift Supervisor.',
+        auditTrail: [...c.auditTrail, audit],
+      };
+    }
+    return c;
+  });
+
+  return {
+    nextState: {
+      ...state,
+      incidents: nextIncidents,
+      complaints: nextComplaints,
+    },
+    incident: updatedIncident,
+  };
+}
+
+/**
+ * Transition incident status with validation and audit logging across the canonical lifecycle:
+ * Open -> Fixed -> Verified -> Closed.
+ */
+export function transitionIncident(
+  state: PlateProofState,
+  incidentId: string,
+  targetStatus: IncidentStatus,
+  actor: string = 'Chef R. Suresh',
+  notes: string = '',
+  actorRole?: UserRole
+): { nextState: PlateProofState; success: boolean; error?: string } {
+  const incident = state.incidents.find((i) => i.id === incidentId);
+  if (!incident) {
+    return { nextState: state, success: false, error: 'Incident not found' };
+  }
+
+  const context: TransitionContext = {
+    actor,
+    actorRole,
+    notes,
+    assignedStaff: incident.assignedTo,
+    incidentEvidenceCount: incident.evidence ? incident.evidence.length : 0,
+  };
+
+  const validation = validateIncidentTransition(incident.status, targetStatus, context);
+  if (!validation.ok) {
+    return { nextState: state, success: false, error: validation.error };
+  }
+
+  const nowFormatted = formatTimestamp();
+  const isClosing = targetStatus === 'closed' || targetStatus === 'verified-closed';
+  const isVerifying = targetStatus === 'verified' || targetStatus === 'verified-closed';
+  const isFixing = targetStatus === 'fixed' || targetStatus === 'awaiting-verification';
+
+  const audit = createAuditEntry(
+    actor,
+    `Status Transition: ${targetStatus}`,
+    notes || `Incident transitioned from ${incident.status} to ${targetStatus}.`,
+    incident.status,
+    targetStatus,
+    true,
+    actorRole
+  );
+
+  const updatedIncident: SafetyIncident = {
+    ...incident,
+    status: targetStatus,
+    supervisorActionNeeded: isClosing ? false : incident.supervisorActionNeeded,
+    fixedAt: isFixing ? incident.fixedAt || nowFormatted : incident.fixedAt,
+    verifiedAt: isVerifying ? nowFormatted : incident.verifiedAt,
+    closedAt: isClosing ? nowFormatted : incident.closedAt,
+    auditTrail: [...(incident.auditTrail || []), audit],
+  };
+
+  const nextIncidents = state.incidents.map((inc) => (inc.id === incidentId ? updatedIncident : inc));
+
+  // If closing incident, also close linked complaints
+  const nextComplaints = state.complaints.map((c) => {
+    if (c.linkedIncidentId === incidentId && isClosing) {
+      return {
+        ...c,
+        status: 'resolved-closed' as const,
+        closedAt: nowFormatted,
+        resolutionNote: notes || 'Incident closed following supervisor verification.',
+        auditTrail: [...c.auditTrail, audit],
+      };
+    }
+    return c;
+  });
+
+  return {
+    nextState: {
+      ...state,
+      incidents: nextIncidents,
+      complaints: nextComplaints,
     },
     success: true,
   };
@@ -442,8 +1012,8 @@ export function logManualTemperatureReading(
   if (isBreached) {
     alertIncident = {
       id: `INC-2026-${Math.floor(200 + Math.random() * 800)}`,
-      title: `Critical Temperature Breach at ${probeLocation} (${tempC}°C)`,
-      severity: 'critical',
+      title: `Operational Temperature Limit Breach at ${probeLocation} (${tempC}°C)`,
+      severity: 'high', // Rule 2: Temperature exceeding configured operational limit -> High severity
       location: probeLocation,
       timestamp: `${nowFormatted} (Today)`,
       reportedBy: `${inspector} (Handheld Spot Check)`,
@@ -479,6 +1049,138 @@ export function logManualTemperatureReading(
   return {
     nextState,
     newAuditRecord,
+    alertIncident,
+  };
+}
+
+/**
+ * Records an inspection hygiene checklist result.
+ * Rule 1: Failed hygiene check -> Medium severity ('moderate').
+ */
+export function logHygieneCheckResult(
+  state: PlateProofState,
+  checkpoint: string,
+  zone: string,
+  passed: boolean,
+  comments: string,
+  inspector: string = 'Chef R. Suresh'
+): { nextState: PlateProofState; auditRecord: InspectionAuditRecord; alertIncident?: SafetyIncident } {
+  const nowFormatted = formatTimestamp();
+  const auditId = `AUD-${Math.floor(8000 + Math.random() * 1000)}`;
+  const auditRecord: InspectionAuditRecord = {
+    id: auditId,
+    time: nowFormatted,
+    checkpoint,
+    supervisor: inspector,
+    result: passed ? 'passed' : 'non-compliant',
+    comments,
+    zone,
+  };
+
+  let alertIncident: SafetyIncident | undefined;
+  const nextIncidents = [...state.incidents];
+
+  if (!passed) {
+    alertIncident = {
+      id: `INC-2026-${Math.floor(300 + Math.random() * 700)}`,
+      title: `Failed Hygiene Check: ${checkpoint}`,
+      severity: 'moderate', // Rule 1: Failed hygiene check -> Medium severity
+      location: zone,
+      timestamp: `${nowFormatted} (Today)`,
+      reportedBy: `${inspector} (Hygiene Checklist Audit)`,
+      supervisorActionNeeded: true,
+      correctiveActionPlan: 'Sanitation remediation, surface swab audit, and retraining.',
+      status: 'open',
+      openedAt: nowFormatted,
+      fixedAt: null,
+      verifiedAt: null,
+      closedAt: null,
+      assignedTo: null,
+      createdBy: inspector,
+      customerVisible: false,
+      internalNotes: `Hygiene checkpoint failure: ${comments}`,
+      evidence: [],
+      auditTrail: [
+        createAuditEntry(
+          inspector,
+          'Failed Hygiene Check',
+          `Non-compliant result recorded at ${zone}: "${comments}"`
+        ),
+      ],
+    };
+    nextIncidents.unshift(alertIncident);
+  }
+
+  return {
+    nextState: {
+      ...state,
+      inspectionAudits: [auditRecord, ...state.inspectionAudits],
+      incidents: nextIncidents,
+    },
+    auditRecord,
+    alertIncident,
+  };
+}
+
+/**
+ * Flags an expired ingredient batch.
+ * Rule 3: Expired ingredient -> Critical severity.
+ */
+export function reportExpiredIngredient(
+  state: PlateProofState,
+  riskId: string,
+  actor: string = 'Chef R. Suresh'
+): { nextState: PlateProofState; alertIncident?: SafetyIncident } {
+  const risk = state.inventoryRisks.find((r) => r.id === riskId);
+  const nowFormatted = formatTimestamp();
+
+  const nextRisks = state.inventoryRisks.map((r) =>
+    r.id === riskId
+      ? {
+          ...r,
+          riskTier: 'critical' as const,
+          hoursUntilExpiry: 0,
+          suggestedAction: `QUARANTINED: Immediate disposal ordered by ${actor} at ${nowFormatted}.`,
+        }
+      : r
+  );
+
+  const ingredientName = risk ? risk.ingredient : 'Batch';
+  const batchNum = risk ? risk.batchNumber : 'N/A';
+  const alertIncident: SafetyIncident = {
+    id: `INC-2026-${Math.floor(400 + Math.random() * 600)}`,
+    title: `Expired Ingredient Discovered: ${ingredientName} (${batchNum})`,
+    severity: 'critical', // Rule 3: Expired ingredient -> Critical severity
+    location: risk?.storageLocation || 'Dry Storage',
+    timestamp: `${nowFormatted} (Today)`,
+    reportedBy: `${actor} (Inventory Audit)`,
+    supervisorActionNeeded: true,
+    correctiveActionPlan: `Immediate quarantine, destruction certificate logging, and batch traceback.`,
+    status: 'open',
+    openedAt: nowFormatted,
+    fixedAt: null,
+    verifiedAt: null,
+    closedAt: null,
+    assignedTo: null,
+    createdBy: actor,
+    customerVisible: false,
+    internalNotes: `Batch ${batchNum} expired. Quarantine initiated.`,
+    evidence: [],
+    auditTrail: [
+      createAuditEntry(
+        actor,
+        'Expired Ingredient Quarantine',
+        `Batch ${batchNum} flagged as expired. Critical incident triggered.`
+      ),
+    ],
+  };
+
+  return {
+    nextState: {
+      ...state,
+      inventoryRisks: nextRisks,
+      incidents: [alertIncident, ...state.incidents],
+    },
     alertIncident,
   };
 }
@@ -552,3 +1254,46 @@ export function attachEvidenceItem(
 
   return state;
 }
+
+/**
+ * Resolves a customer or internal complaint with supervisor notes and creates an immutable audit entry.
+ */
+export function resolveComplaint(
+  state: PlateProofState,
+  complaintId: string,
+  resolutionNote: string,
+  actor: string = 'Chef R. Suresh (FSS-KA-8819)'
+): { nextState: PlateProofState; complaint: ComplaintRecord | null } {
+  const nowFormatted = formatTimestamp();
+  const target = state.complaints.find((c) => c.id === complaintId);
+  if (!target) {
+    return { nextState: state, complaint: null };
+  }
+
+  const audit = createAuditEntry(
+    actor,
+    'Complaint Resolved by Supervisor',
+    `Resolution note: "${resolutionNote}"`,
+    target.status,
+    'resolved-closed'
+  );
+
+  const updated: ComplaintRecord = {
+    ...target,
+    status: 'resolved-closed',
+    resolutionNote,
+    closedAt: nowFormatted,
+    auditTrail: [...target.auditTrail, audit],
+  };
+
+  const nextComplaints = state.complaints.map((c) => (c.id === complaintId ? updated : c));
+
+  return {
+    nextState: {
+      ...state,
+      complaints: nextComplaints,
+    },
+    complaint: updated,
+  };
+}
+

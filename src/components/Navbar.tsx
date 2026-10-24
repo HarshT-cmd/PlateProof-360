@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ShieldCheck, Menu, X, ChefHat, Search } from 'lucide-react';
 import { OrderLookupModal } from './OrderLookupModal';
+import { useSafetyContext } from '../context';
 
 export const Navbar: React.FC = () => {
+  const { backendStatus, refreshBackendStatus } = useSafetyContext();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isLookupOpen, setIsLookupOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<'hero' | 'inspection' | 'how-it-works' | 'standards' | 'institutional'>('hero');
@@ -122,6 +124,27 @@ export const Navbar: React.FC = () => {
 
             {/* Action Buttons */}
             <div className="hidden sm:flex items-center gap-3">
+              {/* Backend & Database Status Badge */}
+              <div
+                title={`Express API Server on port 3001. Database: ${backendStatus.postgresConnected ? 'PostgreSQL 18 Connected' : 'Resilient In-Memory Fallback'}. Click to refresh.`}
+                onClick={() => refreshBackendStatus()}
+                className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-full border text-[11px] font-medium transition-all cursor-pointer ${
+                  backendStatus.isOnline
+                    ? 'border-emerald-700/20 bg-emerald-50 text-emerald-950 hover:bg-emerald-100/70'
+                    : 'border-amber-700/20 bg-amber-50 text-amber-950 hover:bg-amber-100/70'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    backendStatus.isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`}
+                />
+                <span className="font-semibold tracking-tight">API :3001</span>
+                <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-white/80 border border-black/5 text-[#183C2B]">
+                  {backendStatus.postgresConnected ? 'PostgreSQL' : 'Store Sync'}
+                </span>
+              </div>
+
               <button
                 onClick={() => setIsLookupOpen(true)}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold uppercase tracking-wider rounded-lg border border-[#22241F]/15 bg-[#FAF7F0] text-[#183C2B] hover:bg-stone-200/60 transition-all cursor-pointer shadow-xs"

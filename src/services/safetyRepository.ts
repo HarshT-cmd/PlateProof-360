@@ -429,8 +429,9 @@ export class HttpSafetyRepository implements ISafetyRepository {
     this.local = new LocalSafetyRepository();
     this.apiBase =
       apiBase ||
+      (typeof import.meta !== 'undefined' && (import.meta as unknown as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
       (typeof window !== 'undefined' && (window as unknown as { VITE_API_BASE?: string }).VITE_API_BASE) ||
-      'http://localhost:3001/api';
+      '/api';
   }
 
   public subscribe(listener: (state: PlateProofState) => void): () => void {

@@ -24,7 +24,7 @@ function cleanup() {
   try {
     if (backend && !backend.killed) backend.kill();
     if (frontend && !frontend.killed) frontend.kill();
-  } catch (e) {
+  } catch {
     // ignore
   }
   process.exit(0);
